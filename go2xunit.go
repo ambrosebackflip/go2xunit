@@ -350,8 +350,6 @@ var xmlTemplate string = `<?xml version="1.0" encoding="utf-8"?>
 
 // writeXML exits xunit XML of tests to out
 func writeXML(suites []*Suite, outputDir string) error {
-	fmt.Printf("Total number of suites: %d\n", len(suites))
-
 	_, derr := os.Stat(outputDir)
 	if derr == nil {
 		os.RemoveAll(outputDir)
@@ -362,8 +360,6 @@ func writeXML(suites []*Suite, outputDir string) error {
 
 	for _, suite := range suites {
 		resultFile := path.Join(outputDir, strings.Replace(suite.Name, "/", "_", -1)+".xml")
-		fmt.Printf("Writing file: %s\n", resultFile)
-
 		out, cerr := os.Create(resultFile)
 		if cerr != nil {
 			fmt.Printf("Unable to create file: %s (%s)\n", resultFile, cerr)
