@@ -49,9 +49,9 @@ var (
 )
 
 type Test struct {
-	Name, Time, Message string
-	Failed              bool
-	Skipped             bool
+	Name, Time, Message, Suite string
+	Failed                     bool
+	Skipped                    bool
 }
 
 type Suite struct {
@@ -334,7 +334,7 @@ func hasFailures(suites []*Suite) bool {
 var xmlTemplate string = `<?xml version="1.0" encoding="utf-8"?>
 <testsuite name="{{.Name}}" tests="{{.Count}}" errors="0" failures="{{.NumFailed}}" skip="{{.NumSkipped}}">
 {{range  $test := .Tests}}    
-<testcase classname="{{.Name}}" name="{{$test.Name}}" time="{{$test.Time}}">
+<testcase classname="{{$test.Suite}}" name="{{$test.Name}}" time="{{$test.Time}}">
 {{if $test.Skipped }}      
 <skipped/> 
 {{end}}
@@ -446,6 +446,12 @@ func main() {
 	if len(suites) == 0 {
 		log.Fatalf("error: no tests found")
 		os.Exit(1)
+	}
+
+	for _, suite := range suites {
+		for i := 0; i < len(suite.Tests); i++ {
+			suite.Tests[i].Suite = suite.Name
+		}
 	}
 
 	writeXML(suites, *outputDir)
