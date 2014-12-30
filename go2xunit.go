@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path"
 	"regexp"
 	"strings"
 	"text/template"
@@ -78,11 +79,6 @@ func (s *SuiteStack) Pop() *Suite {
 	}
 	s.count--
 	return s.nodes[s.count]
-}
-
-type TestResults struct {
-	Suites []*Suite
-	Multi  bool
 }
 
 func (suite *Suite) NumFailed() int {
@@ -336,34 +332,57 @@ func hasFailures(suites []*Suite) bool {
 }
 
 var xmlTemplate string = `<?xml version="1.0" encoding="utf-8"?>
-{{if .Multi}}<testsuites>{{end}}
-{{range $suite := .Suites}}  <testsuite name="{{.Name}}" tests="{{.Count}}" errors="0" failures="{{.NumFailed}}" skip="{{.NumSkipped}}">
-{{range  $test := $suite.Tests}}    <testcase classname="{{$suite.Name}}" name="{{$test.Name}}" time="{{$test.Time}}">
-{{if $test.Skipped }}      <skipped/> {{end}}
-{{if $test.Failed }}      <failure type="go.error" message="error">
-        <![CDATA[{{$test.Message}}]]>
-      </failure>{{end}}    </testcase>
-{{end}}  </testsuite>
-{{end}}{{if .Multi}}</testsuites>{{end}}
+<testsuite name="{{.Name}}" tests="{{.Count}}" errors="0" failures="{{.NumFailed}}" skip="{{.NumSkipped}}">
+{{range  $test := .Tests}}    
+<testcase classname="{{.Name}}" name="{{$test.Name}}" time="{{$test.Time}}">
+{{if $test.Skipped }}      
+<skipped/> 
+{{end}}
+{{if $test.Failed }}      
+<failure type="go.error" message="error">
+<![CDATA[{{$test.Message}}]]>
+</failure>
+{{end}}    
+</testcase>
+{{end}}  
+</testsuite>
 `
 
 // writeXML exits xunit XML of tests to out
-func writeXML(suites []*Suite, out io.Writer, bamboo bool) {
-	testsResult := TestResults{
-		Suites: suites,
-		Multi:  bamboo || (len(suites) > 1),
+func writeXML(suites []*Suite, outputDir string) error {
+	fmt.Printf("Total number of suites: %d\n", len(suites))
+
+	_, derr := os.Stat(outputDir)
+	if derr == nil {
+		os.RemoveAll(outputDir)
 	}
-	t := template.New("test template")
-	t, err := t.Parse(xmlTemplate)
-	if err != nil {
-		fmt.Printf("Error in parse %v\n", err)
-		return
+	if derr = os.Mkdir(outputDir, 0777); derr != nil {
+		return derr
 	}
-	err = t.Execute(out, testsResult)
-	if err != nil {
-		fmt.Printf("Error in execute %v\n", err)
-		return
+
+	for _, suite := range suites {
+		resultFile := path.Join(outputDir, strings.Replace(suite.Name, "/", "_", -1)+".xml")
+		fmt.Printf("Writing file: %s\n", resultFile)
+
+		out, cerr := os.Create(resultFile)
+		if cerr != nil {
+			fmt.Printf("Unable to create file: %s (%s)\n", resultFile, cerr)
+			return cerr
+		}
+
+		t := template.New("test template")
+		t, perr := t.Parse(xmlTemplate)
+		if perr != nil {
+			fmt.Printf("Error in parse %v\n", perr)
+			return perr
+		}
+		eerr := t.Execute(out, suite)
+		if eerr != nil {
+			fmt.Printf("Error in execute %v\n", eerr)
+			return eerr
+		}
 	}
+	return nil
 }
 
 // getInput return input io.Reader from file name, if file name is - it will
@@ -376,37 +395,21 @@ func getInput(filename string) (io.Reader, error) {
 	return os.Open(filename)
 }
 
-// getInput return output io.Writer from file name, if file name is - it will
-// return os.Stdout
-func getOutput(filename string) (io.Writer, error) {
-	if filename == "-" || filename == "" {
-		return os.Stdout, nil
-	}
-
-	return os.Create(filename)
-}
-
 // getIO returns input and output streams from file names
-func getIO(inputFile, outputFile string) (io.Reader, io.Writer, error) {
+func getIO(inputFile string) (io.Reader, error) {
 	input, err := getInput(inputFile)
 	if err != nil {
-		return nil, nil, fmt.Errorf("can't open %s for reading: %s", inputFile, err)
+		return nil, fmt.Errorf("can't open %s for reading: %s", inputFile, err)
 	}
 
-	output, err := getOutput(outputFile)
-	if err != nil {
-		return nil, nil, fmt.Errorf("can't open %s for writing: %s", outputFile, err)
-	}
-
-	return input, output, nil
+	return input, nil
 }
 
 func main() {
 	inputFile := flag.String("input", "", "input file (default to stdin)")
-	outputFile := flag.String("output", "", "output file (default to stdout)")
+	outputDir := flag.String("output", "", "output directory")
 	fail := flag.Bool("fail", false, "fail (non zero exit) if any test failed")
 	showVersion := flag.Bool("version", false, "print version and exit")
-	bamboo := flag.Bool("bamboo", false, "xml compatible with Atlassian's Bamboo")
 	is_gocheck := flag.Bool("gocheck", false, "parse gocheck output")
 	flag.BoolVar(&failOnRace, "fail-on-race", false, "mark test as failing if it exposes a data race")
 	flag.Parse()
@@ -416,6 +419,10 @@ func main() {
 		os.Exit(0)
 	}
 
+	if len(*outputDir) == 0 {
+		log.Fatalf("error: output directory is required (-output)")
+	}
+
 	// No time ... prefix for error messages
 	log.SetFlags(0)
 
@@ -423,7 +430,7 @@ func main() {
 		log.Fatalf("error: %s does not take parameters (did you mean -input?)", os.Args[0])
 	}
 
-	input, output, err := getIO(*inputFile, *outputFile)
+	input, err := getIO(*inputFile)
 	if err != nil {
 		log.Fatalf("error: %s", err)
 	}
@@ -445,7 +452,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	writeXML(suites, output, *bamboo)
+	writeXML(suites, *outputDir)
 	if *fail && hasFailures(suites) {
 		os.Exit(1)
 	}
