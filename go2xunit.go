@@ -352,7 +352,7 @@ var xmlTemplate string = `<?xml version="1.0" encoding="utf-8"?>
 func writeXML(suites []*Suite, outputDir string) error {
 	_, derr := os.Stat(outputDir)
 	if derr != nil {
-		if derr = os.Mkdir(outputDir, 0777); derr != nil {
+		if derr = os.MkdirAll(outputDir, 0777); derr != nil {
 			return derr
 		}
 	}
