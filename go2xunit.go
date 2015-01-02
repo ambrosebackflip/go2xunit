@@ -351,11 +351,10 @@ var xmlTemplate string = `<?xml version="1.0" encoding="utf-8"?>
 // writeXML exits xunit XML of tests to out
 func writeXML(suites []*Suite, outputDir string) error {
 	_, derr := os.Stat(outputDir)
-	if derr == nil {
-		os.RemoveAll(outputDir)
-	}
-	if derr = os.Mkdir(outputDir, 0777); derr != nil {
-		return derr
+	if derr != nil {
+		if derr = os.Mkdir(outputDir, 0777); derr != nil {
+			return derr
+		}
 	}
 
 	for _, suite := range suites {
