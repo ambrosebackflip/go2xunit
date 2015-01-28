@@ -41,17 +41,37 @@ const (
 	gc_startRE = "START: [^:]+:[^:]+: ([A-Za-z_][[:word:]]*).([A-Za-z_][[:word:]]*)"
 	// PASS: mmath_test.go:16: MySuite.TestAdd	0.000s
 	// FAIL: mmath_test.go:35: MySuite.TestDiv
-	gc_endRE = "(PASS|FAIL): [^:]+:[^:]+: ([A-Za-z_][[:word:]]*).([A-Za-z_][[:word:]]*)([[:space:]]+([0-9]+.[0-9]+))?"
+	gc_endRE = "(PASS|FAIL|SKIP): [^:]+:[^:]+: ([A-Za-z_][[:word:]]*).([A-Za-z_][[:word:]]*)([[:space:]]+([0-9]+.[0-9]+))?"
 )
 
 var (
 	failOnRace = false
 )
 
+const (
+	Unknown = iota
+	Failed  = iota
+	Skipped = iota
+	Passed  = iota
+)
+
+type TestResult int
+
 type Test struct {
 	Name, Time, Message, Suite string
-	Failed                     bool
-	Skipped                    bool
+	Result                     TestResult
+}
+
+func (t *Test) Failed() bool {
+	return t.Result == Failed
+}
+
+func (t *Test) Skipped() bool {
+	return t.Result == Skipped
+}
+
+func (t *Test) Passed() bool {
+	return t.Result == Passed
 }
 
 type Suite struct {
@@ -84,7 +104,7 @@ func (s *SuiteStack) Pop() *Suite {
 func (suite *Suite) NumFailed() int {
 	count := 0
 	for _, test := range suite.Tests {
-		if test.Failed {
+		if test.Result == Failed {
 			count++
 		}
 	}
@@ -95,7 +115,7 @@ func (suite *Suite) NumFailed() int {
 func (suite *Suite) NumSkipped() int {
 	count := 0
 	for _, test := range suite.Tests {
-		if test.Skipped {
+		if test.Result == Skipped {
 			count++
 		}
 	}
@@ -132,8 +152,7 @@ func gt_Parse(rd io.Reader) ([]*Suite, error) {
 	suiteStack := SuiteStack{}
 	// Handles a test that ended with a panic.
 	handlePanic := func() {
-		curTest.Failed = true
-		curTest.Skipped = false
+		curTest.Result = Failed
 		curTest.Time = "N/A"
 		curSuite.Tests = append(curSuite.Tests, curTest)
 		curTest = nil
@@ -206,8 +225,13 @@ func gt_Parse(rd io.Reader) ([]*Suite, error) {
 				err := fmt.Errorf("%d: name mismatch (try disabling parallel mode)", lnum)
 				return nil, err
 			}
-			curTest.Failed = (tokens[1] == "FAIL") || (failOnRace && hasDatarace(out))
-			curTest.Skipped = (tokens[1] == "SKIP")
+			if tokens[1] == "FAIL" || failOnRace && hasDatarace(out) {
+				curTest.Result = Failed
+			} else if tokens[1] == "SKIP" {
+				curTest.Result = Skipped
+			} else {
+				curTest.Result = Passed
+			}
 			curTest.Time = tokens[3]
 			curTest.Message = strings.Join(out, "\n")
 			curSuite.Tests = append(curSuite.Tests, curTest)
@@ -259,6 +283,16 @@ func map2arr(m map[string]*Suite) []*Suite {
 	return arr
 }
 
+func shouldSkipTestWithName(testName string) bool {
+	if testName == "SetUpTest" ||
+		testName == "SetUpSuite" ||
+		testName == "TearDownTest" ||
+		testName == "TearDownSuite" {
+		return true
+	}
+	return false
+}
+
 // gc_Parse parses output of "go test -gocheck.vv", returns a list of tests
 // See data/gocheck.out for an example
 func gc_Parse(rd io.Reader) ([]*Suite, error) {
@@ -266,52 +300,93 @@ func gc_Parse(rd io.Reader) ([]*Suite, error) {
 	find_end := regexp.MustCompile(gc_endRE).FindStringSubmatch
 
 	scanner := bufio.NewScanner(rd)
-	var test *Test
 	var suites = make(map[string]*Suite)
-	var suiteName string
 	var out []string
 
 	for lnum := 1; scanner.Scan(); lnum++ {
 		line := scanner.Text()
+
+		// If this is the start of a test
 		tokens := find_start(line)
 		if len(tokens) > 0 {
-			if test != nil {
-				return nil, fmt.Errorf("%d: start in middle\n", lnum)
-			}
-			suiteName = tokens[1]
-			test = &Test{Name: tokens[2]}
+			suiteName := tokens[1]
+			testName := tokens[2]
+			// Clear the output
 			out = []string{}
+
+			if !shouldSkipTestWithName(testName) {
+				// Find the suite that the test belongs to or create a new one
+				suite, ok := suites[suiteName]
+				if !ok {
+					suite = &Suite{Name: suiteName}
+					suites[suiteName] = suite
+				}
+
+				// Find the test or create a new one
+				var test *Test = nil
+				for i, v := range suite.Tests {
+					if v.Name == testName {
+						test = suite.Tests[i]
+						break
+					}
+				}
+				if test == nil {
+					test = &Test{Name: testName, Result: Unknown}
+					suite.Tests = append(suite.Tests, test)
+				}
+			}
 			continue
 		}
 
+		// If this is the conclusion of a test
 		tokens = find_end(line)
 		if len(tokens) > 0 {
-			if test == nil {
-				return nil, fmt.Errorf("%d: orphan end", lnum)
-			}
-			if (tokens[2] != suiteName) || (tokens[3] != test.Name) {
-				return nil, fmt.Errorf("%d: suite/name mismatch", lnum)
-			}
-			test.Message = strings.Join(out, "\n")
-			test.Time = tokens[4]
-			test.Failed = (tokens[1] == "FAIL")
+			suiteName := tokens[2]
+			testName := tokens[3]
 
-			suite, ok := suites[suiteName]
-			if !ok {
-				suite = &Suite{Name: suiteName}
-			}
-			suite.Tests = append(suite.Tests, test)
-			suites[suiteName] = suite
+			if !shouldSkipTestWithName(testName) {
+				// Find the suite
+				suite, ok := suites[suiteName]
+				if !ok {
+					return nil, fmt.Errorf("%d: orphan end (suite)", lnum)
+				}
 
-			test = nil
-			suiteName = ""
+				// Find the test
+				var test *Test = nil
+				for i, v := range suite.Tests {
+					if v.Name == testName {
+						test = suite.Tests[i]
+						break
+					}
+				}
+				if test == nil {
+					return nil, fmt.Errorf("%d: orphan end (test)", lnum)
+				}
+
+				// Update the test results
+				test.Message = strings.Join(out, "\n")
+				test.Time = tokens[4]
+				if tokens[1] == "FAIL" {
+					test.Result = Failed
+				} else if tokens[1] == "SKIP" {
+					test.Result = Skipped
+				} else {
+					test.Result = Passed
+				}
+			}
+			// Clear the output
 			out = []string{}
-
 			continue
 		}
 
-		if test != nil {
-			out = append(out, line)
+		out = append(out, line)
+	}
+
+	for _, suite := range suites {
+		for _, test := range suite.Tests {
+			if test.Result == Unknown {
+				return nil, fmt.Errorf("unknown test result for test %s in suite %s", test.Name, suite.Name)
+			}
 		}
 	}
 
