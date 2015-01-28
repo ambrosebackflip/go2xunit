@@ -41,7 +41,7 @@ const (
 	gc_startRE = "START: [^:]+:[^:]+: ([A-Za-z_][[:word:]]*).([A-Za-z_][[:word:]]*)"
 	// PASS: mmath_test.go:16: MySuite.TestAdd	0.000s
 	// FAIL: mmath_test.go:35: MySuite.TestDiv
-	gc_endRE = "(PASS|FAIL|SKIP): [^:]+:[^:]+: ([A-Za-z_][[:word:]]*).([A-Za-z_][[:word:]]*)([[:space:]]+([0-9]+.[0-9]+))?"
+	gc_endRE = "(PASS|FAIL|SKIP|PANIC|MISS): [^:]+:[^:]+: ([A-Za-z_][[:word:]]*).([A-Za-z_][[:word:]]*)([[:space:]]+([0-9]+.[0-9]+))?"
 )
 
 var (
@@ -366,7 +366,7 @@ func gc_Parse(rd io.Reader) ([]*Suite, error) {
 				// Update the test results
 				test.Message = strings.Join(out, "\n")
 				test.Time = tokens[4]
-				if tokens[1] == "FAIL" {
+				if tokens[1] == "FAIL" || tokens[1] == "PANIC" || tokens[1] == "MISS" {
 					test.Result = Failed
 				} else if tokens[1] == "SKIP" {
 					test.Result = Skipped
