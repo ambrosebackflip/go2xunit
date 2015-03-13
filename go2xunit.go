@@ -42,6 +42,8 @@ const (
 	// PASS: mmath_test.go:16: MySuite.TestAdd	0.000s
 	// FAIL: mmath_test.go:35: MySuite.TestDiv
 	gc_endRE = "(PASS|FAIL|SKIP|PANIC|MISS): [^:]+:[^:]+: ([A-Za-z_][[:word:]]*).([A-Za-z_][[:word:]]*)([[:space:]]+([0-9]+.[0-9]+))?"
+
+	gc_timeoutRE = "(\\*)+ Test killed with quit: ran too long \\(([A-Za-z0-9][[:word:]]*)\\)"
 )
 
 var (
@@ -293,15 +295,36 @@ func shouldSkipTestWithName(testName string) bool {
 	return false
 }
 
+type testCursor struct {
+	testStack []string
+	suite     string
+}
+
+func (t *testCursor) push(suite, test string) {
+	t.suite = suite
+	t.testStack = append(t.testStack, test)
+}
+
+func (t *testCursor) pop(suite, test string) {
+	t.testStack = t.testStack[:len(t.testStack)-1]
+}
+
+func (t *testCursor) peek() string {
+	return t.testStack[len(t.testStack)-1]
+}
+
 // gc_Parse parses output of "go test -gocheck.vv", returns a list of tests
 // See data/gocheck.out for an example
 func gc_Parse(rd io.Reader) ([]*Suite, error) {
 	find_start := regexp.MustCompile(gc_startRE).FindStringSubmatch
 	find_end := regexp.MustCompile(gc_endRE).FindStringSubmatch
+	find_timeout := regexp.MustCompile(gc_timeoutRE).FindStringSubmatch
 
 	scanner := bufio.NewScanner(rd)
 	var suites = make(map[string]*Suite)
 	var out []string
+
+	cursor := &testCursor{}
 
 	for lnum := 1; scanner.Scan(); lnum++ {
 		line := scanner.Text()
@@ -311,6 +334,9 @@ func gc_Parse(rd io.Reader) ([]*Suite, error) {
 		if len(tokens) > 0 {
 			suiteName := tokens[1]
 			testName := tokens[2]
+
+			cursor.push(suiteName, testName)
+
 			// Clear the output
 			out = []string{}
 
@@ -344,6 +370,8 @@ func gc_Parse(rd io.Reader) ([]*Suite, error) {
 			suiteName := tokens[2]
 			testName := tokens[3]
 
+			cursor.pop(suiteName, testName)
+
 			if !shouldSkipTestWithName(testName) {
 				// Find the suite
 				suite, ok := suites[suiteName]
@@ -373,6 +401,50 @@ func gc_Parse(rd io.Reader) ([]*Suite, error) {
 				} else {
 					test.Result = Passed
 				}
+			}
+			// Clear the output
+			out = []string{}
+			continue
+		}
+
+		if strings.HasPrefix(line, "*** Test killed with quit: ran too long") {
+			tokens = find_timeout(line)
+			if len(tokens) == 0 {
+				panic("failed to find timeout time")
+			} else {
+				for i, t := range tokens {
+					fmt.Printf("%d: %s\n", i, t)
+				}
+			}
+
+			suiteName := cursor.suite
+			testName := cursor.peek()
+
+			cursor.pop(suiteName, testName)
+
+			if !shouldSkipTestWithName(testName) {
+				// Find the suite
+				suite, ok := suites[suiteName]
+				if !ok {
+					return nil, fmt.Errorf("%d: orphan end (suite)", lnum)
+				}
+
+				// Find the test
+				var test *Test = nil
+				for i, v := range suite.Tests {
+					if v.Name == testName {
+						test = suite.Tests[i]
+						break
+					}
+				}
+				if test == nil {
+					return nil, fmt.Errorf("%d: orphan end (test)", lnum)
+				}
+
+				// Update the test results
+				test.Message = strings.Join(out, "\n")
+				test.Time = tokens[2]
+				test.Result = Failed
 			}
 			// Clear the output
 			out = []string{}
