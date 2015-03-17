@@ -337,10 +337,10 @@ func gc_Parse(rd io.Reader) ([]*Suite, error) {
 
 			cursor.push(suiteName, testName)
 
-			// Clear the output
-			out = []string{}
-
 			if !shouldSkipTestWithName(testName) {
+				// Clear the output
+				out = []string{}
+
 				// Find the suite that the test belongs to or create a new one
 				suite, ok := suites[suiteName]
 				if !ok {
@@ -401,9 +401,10 @@ func gc_Parse(rd io.Reader) ([]*Suite, error) {
 				} else {
 					test.Result = Passed
 				}
+
+				// Clear the output
+				out = []string{}
 			}
-			// Clear the output
-			out = []string{}
 			continue
 		}
 
