@@ -319,6 +319,7 @@ func gc_Parse(rd io.Reader) ([]*Suite, error) {
 	find_start := regexp.MustCompile(gc_startRE).FindStringSubmatch
 	find_end := regexp.MustCompile(gc_endRE).FindStringSubmatch
 	find_timeout := regexp.MustCompile(gc_timeoutRE).FindStringSubmatch
+	is_buildFailed := regexp.MustCompile(gt_buildFailed).MatchString
 
 	scanner := bufio.NewScanner(rd)
 	var suites = make(map[string]*Suite)
@@ -328,6 +329,10 @@ func gc_Parse(rd io.Reader) ([]*Suite, error) {
 
 	for lnum := 1; scanner.Scan(); lnum++ {
 		line := scanner.Text()
+
+		if is_buildFailed(line) {
+			return nil, fmt.Errorf("%d: package build failed: %s", lnum, line)
+		}
 
 		// If this is the start of a test
 		tokens := find_start(line)
