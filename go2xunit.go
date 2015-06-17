@@ -234,7 +234,7 @@ func gt_Parse(rd io.Reader) ([]*Suite, error) {
 			} else {
 				curTest.Result = Passed
 			}
-			curTest.Time = tokens[3]
+			curTest.Time = strings.Trim(tokens[3], " \n")
 			curTest.Message = strings.Join(out, "\n")
 			curSuite.Tests = append(curSuite.Tests, curTest)
 			curTest = nil
@@ -398,8 +398,8 @@ func gc_Parse(rd io.Reader) ([]*Suite, error) {
 
 				// Update the test results
 				test.Message = strings.Join(out, "\n")
-				test.Time = tokens[4]
-				if tokens[1] == "FAIL" || tokens[1] == "PANIC" || tokens[1] == "MISS" {
+				test.Time = strings.Trim(tokens[4], " \n")
+				if tokens[1] == "FAIL" || tokens[1] == "PANIC" || tokens[1] == "MISS" || failOnRace && hasDatarace(out) {
 					test.Result = Failed
 				} else if tokens[1] == "SKIP" {
 					test.Result = Skipped
